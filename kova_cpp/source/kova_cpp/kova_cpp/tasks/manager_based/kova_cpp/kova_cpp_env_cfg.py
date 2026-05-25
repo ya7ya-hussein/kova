@@ -5,8 +5,13 @@
 
 Follows the same pattern as YHBot's ``yhbot_navigation_env_cfg.py``.
 
-The walls and obstacle cubes are kinematic ``RigidObjectCfg`` instances placed
-at safe default positions; ``events.randomize_room`` reshapes them per reset.
+CURRICULUM LEARNING (fixed-per-level geometry)
+----------------------------------------------
+Walls and obstacles are spawned ONCE at fixed positions for the current
+curriculum level and are NEVER moved at runtime (runtime repositioning of
+kinematic bodies is unstable in Isaac Lab). To change level, edit
+``CURRICULUM_LEVEL`` in ``mdp/events.py`` — every dimension below derives
+from ``LEVEL_GEOMETRY`` automatically.
 """
 
 from __future__ import annotations
@@ -36,17 +41,58 @@ from .assets import (
     KOVA_WHEEL_BASE,
     KOVA_WHEEL_RADIUS,
 )
-from .mdp.events import CURRICULUM_TABLE, MAX_OBSTACLES, WALL_HEIGHT, WALL_THICKNESS
+from .mdp.events import (
+    CURRICULUM_LEVEL,
+    MAX_OBSTACLES,
+    WALL_HEIGHT,
+    WALL_THICKNESS,
+    active_geometry,
+    obstacle_list,
+    room_size_m,
+)
 
 
 # ============================================================================
-# Scene constants (module-level — must NOT live inside an @configclass body,
-# Isaac Lab's InteractiveScene treats every class attribute as an asset cfg)
+# Level-derived scene geometry (module-level — NOT inside the @configclass
+# body, because Isaac Lab's InteractiveScene treats every class attribute as
+# an asset cfg).
+#
+# CURRICULUM: all of these derive from the active level in mdp/events.py.
+# To change difficulty, edit CURRICULUM_LEVEL there — not here.
 # ============================================================================
 
-_WALL_LONG = 24.0
+_ROOM_W, _ROOM_H = room_size_m()           # interior room size for this level
 _WALL_HEIGHT = WALL_HEIGHT
 _WALL_THICK = WALL_THICKNESS
+
+# Wall lengths span the full room side plus the corner overlap so corners close.
+_WALL_LEN_X = _ROOM_W + 2.0 * _WALL_THICK   # north/south walls run along X
+_WALL_LEN_Y = _ROOM_H + 2.0 * _WALL_THICK   # east/west walls run along Y
+
+# Wall centre offsets: each wall sits just outside the interior on its side.
+_HALF_W = 0.5 * _ROOM_W
+_HALF_H = 0.5 * _ROOM_H
+_HALF_T = 0.5 * _WALL_THICK
+_WALL_Z = 0.5 * _WALL_HEIGHT
+
+# Obstacle layout for this level: list of (cx, cy, half_x, half_y).
+_OBSTACLES = obstacle_list()
+
+
+def _obstacle_init_pos(slot: int) -> tuple[float, float, float]:
+    """Spawn position for obstacle ``slot``. Active obstacles sit in the room;
+    unused slots are parked underground (and never moved again)."""
+    if slot < len(_OBSTACLES):
+        cx, cy, _, _ = _OBSTACLES[slot]
+        return (float(cx), float(cy), _WALL_Z)
+    return (0.0, 0.0, -10.0)  # hidden underground
+
+
+def _obstacle_size(slot: int) -> tuple[float, float, float]:
+    if slot < len(_OBSTACLES):
+        _, _, hx, hy = _OBSTACLES[slot]
+        return (2.0 * float(hx), 2.0 * float(hy), _WALL_HEIGHT)
+    return (0.6, 0.6, _WALL_HEIGHT)  # default size for parked slot
 
 
 # ============================================================================
@@ -73,71 +119,74 @@ class KovaCppSceneCfg(InteractiveSceneCfg):
     # ---- Robot ----
     robot: ArticulationCfg = KOVA_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-    # ---- Walls (4 cubes, kinematic, parameterisable size) ----
-    # The cuboid sizes are set generously enough to cover the largest curriculum
-    # room (level 6: up to 20 × 20 m). Events.randomize_room repositions them.
-
+    # ---- Walls (4 kinematic cubes, FIXED at this level's room geometry) ----
+    # CURRICULUM: size & position derive from the active level (mdp/events.py).
+    # These are spawned once and NEVER moved at runtime — that keeps the sim
+    # stable (runtime kinematic repositioning is what made walls shake before).
     wall_north: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/wall_north",
         spawn=sim_utils.CuboidCfg(
-            size=(_WALL_LONG, _WALL_THICK, _WALL_HEIGHT),
+            size=(_WALL_LEN_X, _WALL_THICK, _WALL_HEIGHT),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.75, 0.78)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 12.0, 0.5 * _WALL_HEIGHT)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, _HALF_H + _HALF_T, _WALL_Z)),
     )
     wall_south: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/wall_south",
         spawn=sim_utils.CuboidCfg(
-            size=(_WALL_LONG, _WALL_THICK, _WALL_HEIGHT),
+            size=(_WALL_LEN_X, _WALL_THICK, _WALL_HEIGHT),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.75, 0.78)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -12.0, 0.5 * _WALL_HEIGHT)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, -(_HALF_H + _HALF_T), _WALL_Z)),
     )
     wall_east: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/wall_east",
         spawn=sim_utils.CuboidCfg(
-            size=(_WALL_THICK, _WALL_LONG, _WALL_HEIGHT),
+            size=(_WALL_THICK, _WALL_LEN_Y, _WALL_HEIGHT),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.75, 0.78)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(12.0, 0.0, 0.5 * _WALL_HEIGHT)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(_HALF_W + _HALF_T, 0.0, _WALL_Z)),
     )
     wall_west: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/wall_west",
         spawn=sim_utils.CuboidCfg(
-            size=(_WALL_THICK, _WALL_LONG, _WALL_HEIGHT),
+            size=(_WALL_THICK, _WALL_LEN_Y, _WALL_HEIGHT),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.75, 0.75, 0.78)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(-12.0, 0.0, 0.5 * _WALL_HEIGHT)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=(-(_HALF_W + _HALF_T), 0.0, _WALL_Z)),
     )
 
-    # ---- Obstacle cubes (2 slots; events places or hides them) ----
+    # ---- Obstacle cubes (FIXED per level; static, never moved at runtime) ----
+    # CURRICULUM: active obstacles spawn at this level's positions; unused slots
+    # spawn parked underground and stay there. Edit obstacle layout in
+    # LEVEL_GEOMETRY (mdp/events.py), not here.
     obstacle_0: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/obstacle_0",
         spawn=sim_utils.CuboidCfg(
-            size=(0.6, 0.6, _WALL_HEIGHT),
+            size=_obstacle_size(0),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.35, 0.35, 0.38)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, -10.0)),  # hidden by default
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_obstacle_init_pos(0)),
     )
     obstacle_1: RigidObjectCfg = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/obstacle_1",
         spawn=sim_utils.CuboidCfg(
-            size=(0.6, 0.6, _WALL_HEIGHT),
+            size=_obstacle_size(1),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.35, 0.35, 0.38)),
         ),
-        init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, -10.0)),
+        init_state=RigidObjectCfg.InitialStateCfg(pos=_obstacle_init_pos(1)),
     )
 
     # ---- 2-D LiDAR (Multi-mesh RayCaster on a single horizontal ring) ----
@@ -248,10 +297,11 @@ class ObservationsCfg:
 
 @configclass
 class EventsCfg:
-    """Single fused reset event that randomises room + obstacles + robot start,
-    and syncs the coverage map's obstacle/free masks. See ``mdp/events.py``.
+    """Reset event: resets the robot pose and syncs the coverage map to this
+    level's FIXED room + obstacle layout. Walls/obstacles are static (set once
+    at spawn). See ``mdp/events.py`` and CURRICULUM_LEVEL there.
     """
-    reset_scene = EventTerm(func=mdp.randomize_room, mode="reset")
+    reset_scene = EventTerm(func=mdp.reset_level, mode="reset")
 
 
 # ============================================================================
@@ -312,6 +362,13 @@ class TerminationsCfg:
         },
         time_out=False,
     )
+    # Physics-instability guard: reset any env whose robot flies away / goes NaN
+    # before the bad state corrupts the coverage map and policy input.
+    out_of_bounds = DoneTerm(
+        func=mdp.robot_out_of_bounds,
+        params={"max_height": 1.5, "max_xy_from_origin": 30.0},
+        time_out=False,
+    )
 
 
 # ============================================================================
@@ -323,10 +380,9 @@ class TerminationsCfg:
 class KovaCppEnvCfg(ManagerBasedRLEnvCfg):
     """KOVA CPP environment configuration."""
 
-    # The user can override curriculum_level externally (env var, CLI, Hydra...)
-    # before constructing the env. __post_init__ reads this to set episode length
-    # and room sampling range.
-    curriculum_level: int = 1
+    # CURRICULUM: the active level is set by CURRICULUM_LEVEL in mdp/events.py.
+    # This mirrors it here only for episode-length / world-size derivation.
+    curriculum_level: int = CURRICULUM_LEVEL
 
     # Scene
     scene: KovaCppSceneCfg = KovaCppSceneCfg(num_envs=4096, env_spacing=30.0)
@@ -344,26 +400,23 @@ class KovaCppEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 1.0 / 60.0
         self.sim.render_interval = self.decimation
 
-        # Episode length and obstacle count per curriculum level
+        # Episode length scales with level (bigger rooms need more time to cover).
+        # CURRICULUM: adjust these if a level needs more/less time to plateau.
         level_episode_s = {1: 60.0, 2: 80.0, 3: 100.0, 4: 120.0, 5: 150.0, 6: 200.0}
-        self.episode_length_s = level_episode_s.get(self.curriculum_level, 120.0)
+        self.episode_length_s = level_episode_s.get(CURRICULUM_LEVEL, 120.0)
 
-        # Make grid scale with curriculum to save memory at lower levels
-        room_min, room_max, _ = CURRICULUM_TABLE.get(
-            self.curriculum_level, CURRICULUM_TABLE[1]
-        )
-        # +4 m of margin around the largest possible room for this level
-        max_world = max(6.0, room_max + 4.0)
+        # Coverage-map world size: cover the room plus margin. Grid scales with
+        # level so lower levels use less VRAM.
+        room_w, room_h = room_size_m()
+        max_world = max(6.0, max(room_w, room_h) + 4.0)
         self.observations.policy.coverage_map.params["max_world_size"] = max_world
 
-        # Inject the post-decimation step dt into the TV reward (it needs it for normalisation)
-        # step_dt is decimation * sim.dt
+        # Inject post-decimation step dt into the TV reward (for normalisation).
         step_dt = self.decimation * self.sim.dt
         self.rewards.tv.params["dt"] = step_dt
 
-        # Env spacing must be larger than the largest possible room to keep envs from overlapping
-        # (each env owns its own walls). Add some margin.
-        self.scene.env_spacing = max(self.scene.env_spacing, room_max + 6.0)
+        # Env spacing must exceed the room so per-env walls never overlap a neighbour.
+        self.scene.env_spacing = max(self.scene.env_spacing, max(room_w, room_h) + 6.0)
 
         # Viewer
         self.viewer.eye = (8.0, 8.0, 8.0)

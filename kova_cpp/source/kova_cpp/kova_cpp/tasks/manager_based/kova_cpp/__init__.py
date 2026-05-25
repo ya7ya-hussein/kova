@@ -34,5 +34,3 @@ gym.register(
         "skrl_cfg_entry_point": _SKRL_CFG,
     },
 )
-
-print(f"[KOVA] Registered tasks: {[t for t in gym.envs.registry if 'KOVA' in t]}")

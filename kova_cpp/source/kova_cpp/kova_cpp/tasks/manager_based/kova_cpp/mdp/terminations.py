@@ -49,3 +49,32 @@ def coverage_complete(
     completion bonuses or trailing reward). Provided here for convenience.
     """
     return env.coverage_map.coverage_pct() >= coverage_threshold
+
+
+def robot_out_of_bounds(
+    env: "ManagerBasedRLEnv",
+    max_height: float = 1.5,
+    max_xy_from_origin: float = 30.0,
+) -> torch.Tensor:
+    """Failure guard against physics instability.
+
+    Catches the documented Isaac Lab failure where an unstable articulation
+    "flies away" (position goes huge or NaN) and then vanishes from the scene,
+    silently stalling training. By terminating these envs we force a clean
+    reset before the bad state propagates into the coverage map / policy.
+
+    Triggers when, relative to the env origin, the robot:
+      * has a non-finite root position (NaN / inf), OR
+      * is higher than ``max_height`` m (launched into the air), OR
+      * is farther than ``max_xy_from_origin`` m horizontally (flung away).
+    """
+    robot = env.scene["robot"]
+    pos_w = robot.data.root_pos_w  # [N, 3] world frame
+    origins = env.scene.env_origins  # [N, 3]
+    local = pos_w - origins
+
+    non_finite = ~torch.isfinite(pos_w).all(dim=-1)
+    too_high = local[:, 2] > max_height
+    too_far = torch.linalg.norm(local[:, :2], dim=-1) > max_xy_from_origin
+
+    return non_finite | too_high | too_far

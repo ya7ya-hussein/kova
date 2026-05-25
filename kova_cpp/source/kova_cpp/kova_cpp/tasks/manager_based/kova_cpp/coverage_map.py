@@ -113,11 +113,18 @@ class CoverageMap:
     def world_to_grid(
         self, x: torch.Tensor, y: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Vectorised world-to-grid index. Clamped to valid range."""
-        col = ((x - self.origin_x) / self.cell_size).long()
-        row = ((y - self.origin_y) / self.cell_size).long()
-        col = col.clamp(0, self.W - 1)
-        row = row.clamp(0, self.H - 1)
+        """Vectorised world-to-grid index. Clamped to valid range.
+
+        Note: NaN/inf must be scrubbed BEFORE .long(), because casting a
+        non-finite float to long is undefined and clamp() will not fix it —
+        on CUDA this yields out-of-range scatter indices and silent corruption.
+        """
+        xf = ((x - self.origin_x) / self.cell_size)
+        yf = ((y - self.origin_y) / self.cell_size)
+        xf = torch.nan_to_num(xf, nan=0.0, posinf=0.0, neginf=0.0)
+        yf = torch.nan_to_num(yf, nan=0.0, posinf=0.0, neginf=0.0)
+        col = xf.long().clamp(0, self.W - 1)
+        row = yf.long().clamp(0, self.H - 1)
         return row, col
 
     # ------------------------------------------------------------------- reset

@@ -105,6 +105,18 @@ class CoverageMapObs(ManagerTermBase):
         quat = robot.data.root_quat_w  # (w, x, y, z)
         w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
         yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+        # --- Finite guard ---------------------------------------------------
+        # If physics has gone unstable for any env, robot_xy / yaw can be NaN or
+        # inf. Feeding those into the coverage map produces garbage long indices
+        # (clamp does NOT sanitise NaN), which corrupts the map and the policy
+        # input, cascading into ever-larger actions -> robots fly away & vanish.
+        # We replace non-finite pose values with safe defaults here; the
+        # accompanying termination guard (see terminations.py) resets the env.
+        robot_xy = torch.nan_to_num(robot_xy, nan=0.0, posinf=0.0, neginf=0.0)
+        yaw = torch.nan_to_num(yaw, nan=0.0, posinf=0.0, neginf=0.0)
+        # --------------------------------------------------------------------
+
         env.coverage_map.update(robot_xy, yaw)
 
         # Roll action history: shift left, append last action (raw policy output)
@@ -116,8 +128,9 @@ class CoverageMapObs(ManagerTermBase):
         env.action_history[:, :-1] = env.action_history[:, 1:].clone()
         env.action_history[:, -1] = last_act[:, :2]
 
-        # Return multi-scale egocentric obs
-        return env.coverage_map.get_multiscale_obs()
+        # Return multi-scale egocentric obs (final finite guard)
+        obs = env.coverage_map.get_multiscale_obs()
+        return torch.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=0.0)
 
 
 # ============================================================================
