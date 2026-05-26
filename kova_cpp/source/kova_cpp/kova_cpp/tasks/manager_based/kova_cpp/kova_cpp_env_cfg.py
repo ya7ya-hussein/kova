@@ -311,25 +311,34 @@ class EventsCfg:
 
 @configclass
 class RewardsCfg:
-    """All weights from the spec."""
+    """Reward weights rebalanced to the proven Vervloet CPP ratio.
 
+    KEY FIX: new_cell:step ratio is now 20:1 (was 1:1). Discovering a single
+    new cell (+1.0) must dominate the per-step cost (-0.05) so that *any*
+    exploratory motion is net-positive — otherwise PPO learns to freeze.
+    """
+
+    # Discovery dominates movement 20:1 (Vervloet DISC_REWARD=1.0 / MOVE_PUNISH=0.05).
     new_cell = RewTerm(func=mdp.new_cell_reward, weight=1.0)
-    step = RewTerm(func=mdp.step_penalty, weight=-1.0)
+    step = RewTerm(func=mdp.step_penalty, weight=-0.05)
     tv = RewTerm(
         func=mdp.total_variation_reward,
-        weight=0.2,
+        weight=0.05,
         params={"v_max": KOVA_MAX_LIN, "dt": None},  # filled by env at runtime
     )
-    distance_guidance = RewTerm(func=mdp.distance_guidance_reward, weight=0.25)
-    direction_change = RewTerm(func=mdp.direction_change_penalty, weight=-0.25)
+    # Distance guidance kept small so it nudges toward frontier without becoming
+    # the dominant signal the policy games (it was the only positive signal before).
+    distance_guidance = RewTerm(func=mdp.distance_guidance_reward, weight=0.05)
+    direction_change = RewTerm(func=mdp.direction_change_penalty, weight=-0.02)
+    # Completion is now actually reachable once exploration works; keep it large.
     completion = RewTerm(
         func=mdp.completion_bonus,
-        weight=200.0,
+        weight=50.0,
         params={"coverage_threshold": 0.95},
     )
     collision = RewTerm(
         func=mdp.collision_penalty,
-        weight=-10.0,
+        weight=-5.0,
         params={
             "force_threshold": 0.5,
             "startup_grace_steps": 30,
@@ -337,7 +346,7 @@ class RewardsCfg:
         },
     )
     # Layer-1 action masking via reward shaping (small negative weight).
-    blocking = RewTerm(func=mdp.blocking_penalty, weight=-0.5)
+    blocking = RewTerm(func=mdp.blocking_penalty, weight=-0.1)
 
 
 # ============================================================================
@@ -350,7 +359,12 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     no_progress = DoneTerm(
         func=mdp.no_progress,
-        params={"max_steps_without_new_cell": 500},
+        params={"max_steps_without_new_cell": 60},
+        time_out=False,
+    )
+    stuck_in_place = DoneTerm(
+        func=mdp.stuck_in_place,
+        params={"max_steps_without_moving": 30},
         time_out=False,
     )
     collision = DoneTerm(

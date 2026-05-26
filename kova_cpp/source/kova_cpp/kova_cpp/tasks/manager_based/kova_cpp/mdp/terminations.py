@@ -22,6 +22,20 @@ def no_progress(
     return env.coverage_map.steps_since_new_cell >= max_steps_without_new_cell
 
 
+def stuck_in_place(
+    env: "ManagerBasedRLEnv",
+    max_steps_without_moving: int = 30,
+) -> torch.Tensor:
+    """Failure if the robot is physically stuck (wall-hugging or frozen).
+
+    Uses displacement tracking from the coverage map: counts consecutive steps
+    where the robot moved less than half a cell. Catches the two observed
+    failure modes (driving into a wall in a loop, or freezing in the center)
+    even when no_progress would not fire because a cell was occasionally clipped.
+    """
+    return env.coverage_map.steps_since_moved >= max_steps_without_moving
+
+
 def collision_termination(
     env: "ManagerBasedRLEnv",
     force_threshold: float = 0.5,

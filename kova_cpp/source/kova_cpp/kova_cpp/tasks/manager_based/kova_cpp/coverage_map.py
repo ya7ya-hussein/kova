@@ -95,6 +95,11 @@ class CoverageMap:
         self.robot_row = torch.zeros(num_envs, dtype=torch.long, device=self.device)
         self.robot_col = torch.zeros(num_envs, dtype=torch.long, device=self.device)
 
+        # Displacement tracking — used to detect a robot that is physically stuck
+        # (wall-hugging or frozen in place) even if it occasionally clips a cell.
+        self.robot_xy_world = torch.zeros(num_envs, 2, device=self.device)
+        self.steps_since_moved = torch.zeros(num_envs, dtype=torch.long, device=self.device)
+
         # Pre-built dilation kernel for sweep stamping (a disc of radius = robot_radius)
         self._sweep_kernel = self._build_sweep_kernel()
 
@@ -143,6 +148,7 @@ class CoverageMap:
             self.visited_free_cells.zero_()
             self.prev_tv.zero_()
             self.completion_bonus_given.zero_()
+            self.steps_since_moved.zero_()
         else:
             self.visited[env_ids] = False
             self.frontier[env_ids] = False
@@ -151,6 +157,7 @@ class CoverageMap:
             self.visited_free_cells[env_ids] = 0
             self.prev_tv[env_ids] = 0.0
             self.completion_bonus_given[env_ids] = False
+            self.steps_since_moved[env_ids] = 0
 
     def reset_room(
         self,
@@ -237,6 +244,18 @@ class CoverageMap:
         self.robot_row.copy_(rows)
         self.robot_col.copy_(cols)
         self.robot_yaw = robot_yaw  # cached for obs rotation
+
+        # Displacement-based stuck detection: if the robot has moved less than
+        # half a cell since last step, increment the stuck counter; else reset.
+        # Catches wall-hugging and center-freeze even when no cell is discovered.
+        moved = torch.linalg.norm(robot_xy - self.robot_xy_world, dim=-1)
+        is_stuck_step = moved < (0.5 * self.cell_size)
+        self.steps_since_moved = torch.where(
+            is_stuck_step,
+            self.steps_since_moved + 1,
+            torch.zeros_like(self.steps_since_moved),
+        )
+        self.robot_xy_world.copy_(robot_xy)
 
         # Build per-env "centre stamp" maps and dilate with the sweep kernel.
         # This is one batched convolution.
