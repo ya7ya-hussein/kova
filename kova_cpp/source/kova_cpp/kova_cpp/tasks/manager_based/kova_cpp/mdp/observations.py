@@ -101,7 +101,13 @@ class CoverageMapObs(ManagerTermBase):
     ) -> torch.Tensor:
         # Update coverage map from current robot pose
         robot = env.scene["robot"]
-        robot_xy = robot.data.root_pos_w[:, :2]
+        # root_pos_w is WORLD frame and includes this env's tiled origin offset.
+        # The coverage map (free_mask, world_to_grid) lives in a single env-LOCAL
+        # frame centred at (0,0). At >1 env, every env whose origin != (0,0) would
+        # otherwise be clamped to a grid corner OUTSIDE the room, so
+        # newly_visited is always empty and new_cell stays 0. Subtract the per-env
+        # origin to map back into the shared local frame.
+        robot_xy = robot.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
         quat = robot.data.root_quat_w  # (w, x, y, z)
         w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
         yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))

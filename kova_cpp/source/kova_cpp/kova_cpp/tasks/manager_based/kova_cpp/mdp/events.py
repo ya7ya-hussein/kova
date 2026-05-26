@@ -129,6 +129,15 @@ def reset_level(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
     yaw = (torch.rand(n, device=device) * 2.0 - 1.0) * math.pi
     _set_robot_pose(env, env_ids, rx, ry, yaw)
 
+    # Seed the stuck-detector's reference position with the ACTUAL local spawn
+    # (rx, ry). Without this, the first-step displacement is measured against the
+    # previous episode's last position, which is unrelated motion. Harmless today
+    # (one spurious step can't trigger the 30-step stuck termination) but seeding
+    # here makes the first-step displacement a true zero and removes the latent
+    # fragility. robot_xy_world holds env-LOCAL XY (matches update() after the
+    # world->local fix), so rx/ry are exactly the right values.
+    env.coverage_map.robot_xy_world[env_ids] = torch.stack([rx, ry], dim=-1)
+
     # --- 2) Sync coverage map with FIXED room size + FIXED obstacles
     room_size = torch.tensor([room_w, room_h], device=device).expand(n, 2).contiguous()
 

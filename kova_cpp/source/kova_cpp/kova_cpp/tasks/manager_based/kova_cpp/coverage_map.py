@@ -245,11 +245,17 @@ class CoverageMap:
         self.robot_col.copy_(cols)
         self.robot_yaw = robot_yaw  # cached for obs rotation
 
-        # Displacement-based stuck detection: if the robot has moved less than
-        # half a cell since last step, increment the stuck counter; else reset.
-        # Catches wall-hugging and center-freeze even when no cell is discovered.
+        # Displacement-based stuck detection. The threshold must be SMALLER than
+        # the achievable displacement per outer step, otherwise a robot moving at
+        # full speed is wrongly flagged as stuck every step.
+        #   max disp/step = max_linear_speed * step_dt
+        #                 = 0.6 m/s * (decimation 4 / 60 Hz) = 0.6 * 0.0667 ~= 0.040 m
+        # The old threshold (0.5 * cell_size = 0.05 m) EXCEEDED this, so it fired
+        # unconditionally and capped every episode at ~max_steps_without_moving.
+        # 0.005 m (~1/8 of max disp) reliably separates "frozen" from "crawling".
+        stuck_threshold = 0.005  # metres; << per-step achievable displacement
         moved = torch.linalg.norm(robot_xy - self.robot_xy_world, dim=-1)
-        is_stuck_step = moved < (0.5 * self.cell_size)
+        is_stuck_step = moved < stuck_threshold
         self.steps_since_moved = torch.where(
             is_stuck_step,
             self.steps_since_moved + 1,
