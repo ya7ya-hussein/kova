@@ -447,15 +447,24 @@ class CoverageMap:
 
     # ---------------------------------------- 4-direction validity (masking layer 1)
 
-    def get_valid_directions(self) -> torch.Tensor:
-        """For each env, which of the 4 cardinal cells from the robot is
-        in-bounds, free, and unvisited. Returns ``[N, 4]`` bool — order is
-        N, E, S, W (i.e. +y, +x, -y, -x). Used by the reward-shaping mask.
+    def get_valid_directions(self, lookahead: int = 3) -> torch.Tensor:
+        """For each env, which of the 4 cardinal cells ``lookahead`` cells from
+        the robot is in-bounds, free, and unvisited. Returns ``[N, 4]`` bool —
+        order is N, E, S, W (i.e. +y, +x, -y, -x). Used by the reward-shaping mask.
+
+        ``lookahead`` MUST exceed the sweep-disc radius in cells
+        (``ceil(robot_radius / cell_size)``), otherwise the probed cell is always
+        inside the already-swept (visited) disc and ``unvisited`` is never True,
+        so the blocking penalty can never fire. With robot_radius=0.18m and
+        cell_size=0.1m the sweep radius is 2 cells, so the default 3 looks just
+        beyond it. A larger value probes a wider planning horizon.
         """
         N = self.num_envs
         r, c = self.robot_row, self.robot_col
-        # Offsets: N(+y / +row), E(+x / +col), S(-y / -row), W(-x / -col)
-        offsets = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+        L = int(lookahead)
+        # Offsets: N(+y / +row), E(+x / +col), S(-y / -row), W(-x / -col), scaled
+        # by the look-ahead distance so we probe BEYOND the sweep disc.
+        offsets = [(L, 0), (0, L), (-L, 0), (0, -L)]
         out = torch.zeros(N, 4, dtype=torch.bool, device=self.device)
         idx = torch.arange(N, device=self.device)
         for i, (dr, dc) in enumerate(offsets):

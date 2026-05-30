@@ -359,7 +359,7 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     no_progress = DoneTerm(
         func=mdp.no_progress,
-        params={"max_steps_without_new_cell": 60},
+        params={"max_steps_without_new_cell": 300},
         time_out=False,
     )
     stuck_in_place = DoneTerm(
@@ -416,8 +416,14 @@ class KovaCppEnvCfg(ManagerBasedRLEnvCfg):
 
         # Episode length scales with level (bigger rooms need more time to cover).
         # CURRICULUM: adjust these if a level needs more/less time to plateau.
-        level_episode_s = {1: 60.0, 2: 80.0, 3: 100.0, 4: 120.0, 5: 150.0, 6: 200.0}
-        self.episode_length_s = level_episode_s.get(CURRICULUM_LEVEL, 120.0)
+        # NOTE: coverage rate decays sharply in the endgame (the last ~20% of
+        # cells are scattered islands requiring navigation across visited ground),
+        # so the budget must be well above (cells_needed / early_game_rate).
+        # Level 1: 4x4m = 1600 free cells, 95% threshold = 1520 cells. At the
+        # observed ~1.41 cells/step AVERAGE the old 900-step (60s) budget only
+        # reached ~78%. 150s = 2250 steps gives the slow endgame ample headroom.
+        level_episode_s = {1: 150.0, 2: 180.0, 3: 220.0, 4: 280.0, 5: 350.0, 6: 450.0}
+        self.episode_length_s = level_episode_s.get(CURRICULUM_LEVEL, 150.0)
 
         # Coverage-map world size: cover the room plus margin. Grid scales with
         # level so lower levels use less VRAM.
