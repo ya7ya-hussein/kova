@@ -320,7 +320,7 @@ class RewardsCfg:
 
     # Discovery dominates movement 20:1 (Vervloet DISC_REWARD=1.0 / MOVE_PUNISH=0.05).
     new_cell = RewTerm(func=mdp.new_cell_reward, weight=1.0)
-    step = RewTerm(func=mdp.step_penalty, weight=-0.05)
+    step = RewTerm(func=mdp.step_penalty, weight=-0.12)
     tv = RewTerm(
         func=mdp.total_variation_reward,
         weight=0.05,
@@ -359,7 +359,7 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     no_progress = DoneTerm(
         func=mdp.no_progress,
-        params={"max_steps_without_new_cell": 300},
+        params={"max_steps_without_new_cell": 150},
         time_out=False,
     )
     stuck_in_place = DoneTerm(
@@ -374,6 +374,11 @@ class TerminationsCfg:
             "startup_grace_steps": 30,
             "sensor_cfg": SceneEntityCfg("contact_forces"),
         },
+        time_out=False,
+    )
+    coverage_complete = DoneTerm(
+        func=mdp.coverage_complete,
+        params={"coverage_threshold": 0.95},
         time_out=False,
     )
     # Physics-instability guard: reset any env whose robot flies away / goes NaN
@@ -422,7 +427,7 @@ class KovaCppEnvCfg(ManagerBasedRLEnvCfg):
         # Level 1: 4x4m = 1600 free cells, 95% threshold = 1520 cells. At the
         # observed ~1.41 cells/step AVERAGE the old 900-step (60s) budget only
         # reached ~78%. 150s = 2250 steps gives the slow endgame ample headroom.
-        level_episode_s = {1: 150.0, 2: 180.0, 3: 220.0, 4: 280.0, 5: 350.0, 6: 450.0}
+        level_episode_s = {1: 140.0, 2: 220.0, 3: 220.0, 4: 280.0, 5: 350.0, 6: 450.0}
         self.episode_length_s = level_episode_s.get(CURRICULUM_LEVEL, 150.0)
 
         # Coverage-map world size: cover the room plus margin. Grid scales with

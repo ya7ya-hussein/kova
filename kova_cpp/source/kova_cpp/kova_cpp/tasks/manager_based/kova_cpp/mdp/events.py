@@ -60,7 +60,7 @@ CURRICULUM_LEVEL = 1
 #       level 2 onward. All values in metres, room-centred at the env origin.
 LEVEL_GEOMETRY = {
     1: dict(room_w=4.0,  room_h=4.0,  robot_box=(1.0, 1.0), obstacles=[]),
-    2: dict(room_w=6.0,  room_h=6.0,  robot_box=(1.5, 1.5),
+    2: dict(room_w=6.0,  room_h=6.0,  robot_box=(0.8, 0.8),
             obstacles=[(1.2, 1.2, 0.3, 0.3)]),
     3: dict(room_w=8.0,  room_h=8.0,  robot_box=(2.0, 2.0),
             obstacles=[(2.0, 1.5, 0.4, 0.4)]),

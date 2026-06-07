@@ -114,6 +114,8 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 import kova_cpp.tasks  # noqa: F401
+from kova_cpp.tasks.manager_based.kova_cpp.mdp.action_masking import apply_dijkstra_escape
+
 
 # config shortcuts
 if args_cli.agent is None:
@@ -212,6 +214,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
     # reset environment
     obs, _ = env.reset()
     timestep = 0
+
+    base_env = env.unwrapped
+    # outer steps allowed per episode = episode_length_s / (decimation * sim.dt)
+    max_steps = base_env.max_episode_length          # Isaac Lab exposes this (in outer steps)
+    step_dt = base_env.step_dt                        # seconds per outer step (~0.0667)
+
+
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -226,8 +235,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
             # - single-agent (deterministic) actions
             else:
                 actions = outputs[-1].get("mean_actions", outputs[0])
+            # Layer-2 escape: override only envs stuck >= k_s steps (deployment value)
+            # actions = apply_dijkstra_escape(env.unwrapped, actions, stuck_threshold=3)
             # env stepping
             obs, _, _, _, _ = env.step(actions)
+
+            # --- telemetry (env 0) ---
+            steps_done = int(base_env.episode_length_buf[0].item())
+            steps_left = max_steps - steps_done
+            time_left = steps_left * step_dt
+            cov_pct = float(base_env.coverage_map.coverage_pct()[0].item()) * 100.0
+            print(f"[env0] coverage: {cov_pct:5.1f}%   time left: {time_left:6.1f}s   "
+                  f"({steps_left:4d}/{max_steps} steps)", end="\r")
+
         if args_cli.video:
             timestep += 1
             # exit the play loop after recording one video
