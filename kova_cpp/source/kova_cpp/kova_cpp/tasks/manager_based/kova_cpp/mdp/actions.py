@@ -1,16 +1,5 @@
-# Copyright (c) 2025, KOVA Project.
+# Copyright (c) 2026, KOVA Project.
 # SPDX-License-Identifier: BSD-3-Clause
-
-"""Custom differential-drive action term for KOVA.
-
-Maps a 2-D normalised policy output (v, ω) ∈ [-1, 1]^2 to per-wheel velocity
-targets via differential-drive kinematics, matching the spec:
-
-    ω_left  = (v - ω · L/2) / r_wheel
-    ω_right = (v + ω · L/2) / r_wheel
-
-where L is the wheel base and r_wheel is the wheel radius.
-"""
 
 from __future__ import annotations
 
@@ -23,7 +12,7 @@ from isaaclab.utils import configclass
 
 
 class DifferentialDriveAction(ActionTerm):
-    """Differential-drive action: 2-D continuous (v, ω) → two wheel velocities."""
+    """Differential-drive action: 2-D continuous (v, ω)"""
 
     cfg: "DifferentialDriveActionCfg"
     _asset: Articulation
@@ -49,8 +38,8 @@ class DifferentialDriveAction(ActionTerm):
 
         # Buffers
         self._raw_actions = torch.zeros(self.num_envs, 2, device=self.device)
-        self._processed_actions = torch.zeros(self.num_envs, 2, device=self.device)  # [v_mps, w_radps]
-        self._wheel_targets = torch.zeros(self.num_envs, 2, device=self.device)       # [w_L, w_R]
+        self._processed_actions = torch.zeros(self.num_envs, 2, device=self.device)
+        self._wheel_targets = torch.zeros(self.num_envs, 2, device=self.device)
 
         # Stash kinematic params
         self._r = float(cfg.wheel_radius)
@@ -58,7 +47,7 @@ class DifferentialDriveAction(ActionTerm):
         self._v_max = float(cfg.max_linear_speed)
         self._w_max = float(cfg.max_angular_speed)
 
-    # ----- ActionTerm API
+    # ActionTerm API
     @property
     def action_dim(self) -> int:
         return 2
@@ -72,11 +61,11 @@ class DifferentialDriveAction(ActionTerm):
         return self._processed_actions
 
     def process_actions(self, actions: torch.Tensor) -> None:
-        # Policy is expected to output values roughly in [-1, 1]; clamp defensively.
+        # Policy is expected to output values roughly in [-1, 1]
         self._raw_actions.copy_(actions)
         a = actions.clamp(-1.0, 1.0)
-        v = a[:, 0] * self._v_max     # m/s
-        w = a[:, 1] * self._w_max     # rad/s
+        v = a[:, 0] * self._v_max     
+        w = a[:, 1] * self._w_max     
         self._processed_actions[:, 0] = v
         self._processed_actions[:, 1] = w
 

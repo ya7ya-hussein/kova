@@ -1,42 +1,5 @@
-# Copyright (c) 2025, KOVA Project.
+# Copyright (c) 2026, KOVA Project.
 # SPDX-License-Identifier: BSD-3-Clause
-
-"""Reset events for KOVA — FIXED-PER-LEVEL geometry (curriculum learning).
-
-=============================================================================
-                    >>> CURRICULUM LEARNING — HOW TO USE <<<
-=============================================================================
-This file defines a FIXED room geometry per curriculum level. Walls and
-obstacles are spawned ONCE at their level positions (in the scene cfg) and are
-NEVER moved at runtime. Only the robot is reset each episode.
-
-Why fixed (and not dynamically resized per episode)?
-  Repositioning kinematic rigid bodies (walls) at runtime via
-  write_root_pose_to_sim is NOT reliably supported in Isaac Lab
-  (see IsaacLab issues #2069, #4147 and the "Known Issues" page). Doing so
-  caused the walls to jitter/shake and the robot's contacts to explode,
-  launching it out of the scene. Fixed walls are rock-solid.
-
->>> TO PROMOTE TO THE NEXT LEVEL (e.g. level 1 -> level 2): <<<
-  1. Change CURRICULUM_LEVEL below to the new level number.
-  2. (Nothing else — wall size/position, robot spawn area, obstacle layout
-     and the coverage-map world size all derive automatically from
-     LEVEL_GEOMETRY[CURRICULUM_LEVEL].)
-  3. Restart training, resuming from the previous level's checkpoint:
-        python scripts/skrl/train.py --task Isaac-Coverage-KOVA-v0 \
-            --num_envs 2048 --headless --checkpoint <prev_level_best.pt>
-
->>> TO TUNE A LEVEL'S GEOMETRY: <<<
-  Edit the matching row in LEVEL_GEOMETRY below. Each row is:
-      room_w, room_h : interior room size in metres (square-ish rooms work best)
-      robot_box      : (x_half, y_half) — robot spawns uniformly in a centred
-                       box of this half-size (set both to 0.0 for a fixed
-                       centre spawn). Keep >= 0.5 m clear of the walls.
-      obstacles      : list of (cx, cy, half_x, half_y) cubes, in room-centred
-                       metres. Empty list = no obstacles. These are baked into
-                       the scene at spawn AND into the coverage map.
-=============================================================================
-"""
 
 from __future__ import annotations
 
@@ -48,19 +11,11 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-# =============================================================================
-#  >>>>>>>>>>>>>>>>>>>>  EDIT THIS TO CHANGE LEVEL  <<<<<<<<<<<<<<<<<<<<
-# =============================================================================
-CURRICULUM_LEVEL = 1
-# =============================================================================
+CURRICULUM_LEVEL = 2
 
-
-# Fixed geometry per level.  (cx, cy, half_x, half_y) for obstacles.
-# NOTE: room sizes grow with level (the curriculum). Obstacles introduced from
-#       level 2 onward. All values in metres, room-centred at the env origin.
 LEVEL_GEOMETRY = {
     1: dict(room_w=4.0,  room_h=4.0,  robot_box=(1.0, 1.0), obstacles=[]),
-    2: dict(room_w=6.0,  room_h=6.0,  robot_box=(1.5, 1.5),
+    2: dict(room_w=6.0,  room_h=6.0,  robot_box=(0.8, 0.8),
             obstacles=[(1.2, 1.2, 0.3, 0.3)]),
     3: dict(room_w=8.0,  room_h=8.0,  robot_box=(2.0, 2.0),
             obstacles=[(2.0, 1.5, 0.4, 0.4)]),
@@ -72,19 +27,13 @@ LEVEL_GEOMETRY = {
             obstacles=[(5.0, 4.0, 0.5, 0.5), (-4.5, -5.0, 0.5, 0.5)]),
 }
 
-# Absolute upper bound on obstacle slots in the scene. Must be >= the longest
-# obstacle list in LEVEL_GEOMETRY. The scene always spawns this many slots;
-# unused ones are parked underground at spawn time (never moved at runtime).
 MAX_OBSTACLES = 2
 
-WALL_THICKNESS = 0.2   # m
-WALL_HEIGHT = 0.5      # m
+WALL_THICKNESS = 0.2  
+WALL_HEIGHT = 0.5     
 
 
-# -----------------------------------------------------------------------------
-# Convenience accessors (used by the env cfg to build the scene + coverage map)
-# -----------------------------------------------------------------------------
-
+# Convenience accessors
 def active_geometry() -> dict:
     """Return the geometry dict for the currently selected curriculum level."""
     return LEVEL_GEOMETRY.get(CURRICULUM_LEVEL, LEVEL_GEOMETRY[1])
@@ -100,17 +49,7 @@ def obstacle_list() -> list[tuple[float, float, float, float]]:
     return list(active_geometry()["obstacles"])
 
 
-# =============================================================================
 # Reset event
-# =============================================================================
-#
-# Curriculum note: this NO LONGER moves walls or obstacles (they are static for
-# the whole run). It only (1) resets the robot to a random pose inside the
-# level's room and (2) syncs the coverage map with the level's FIXED room size
-# and obstacle layout.
-# =============================================================================
-
-
 def reset_level(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
     """Reset robot pose + sync coverage map for the fixed-geometry level."""
     if env_ids.numel() == 0:
@@ -121,7 +60,7 @@ def reset_level(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
     room_w, room_h = room_size_m()
     obstacles = obstacle_list()
 
-    # --- 1) Reset robot pose (random within the level's robot_box, random yaw)
+    # 1) Reset robot pose (random within the level's robot_box, random yaw)
     g = active_geometry()
     bx, by = g["robot_box"]
     rx = (torch.rand(n, device=device) * 2.0 - 1.0) * bx
@@ -129,16 +68,9 @@ def reset_level(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
     yaw = (torch.rand(n, device=device) * 2.0 - 1.0) * math.pi
     _set_robot_pose(env, env_ids, rx, ry, yaw)
 
-    # Seed the stuck-detector's reference position with the ACTUAL local spawn
-    # (rx, ry). Without this, the first-step displacement is measured against the
-    # previous episode's last position, which is unrelated motion. Harmless today
-    # (one spurious step can't trigger the 30-step stuck termination) but seeding
-    # here makes the first-step displacement a true zero and removes the latent
-    # fragility. robot_xy_world holds env-LOCAL XY (matches update() after the
-    # world->local fix), so rx/ry are exactly the right values.
     env.coverage_map.robot_xy_world[env_ids] = torch.stack([rx, ry], dim=-1)
 
-    # --- 2) Sync coverage map with FIXED room size + FIXED obstacles
+    # 2) Sync coverage map with FIXED room size + FIXED obstacles
     room_size = torch.tensor([room_w, room_h], device=device).expand(n, 2).contiguous()
 
     obstacles_world = torch.full(
@@ -155,10 +87,7 @@ def reset_level(env: "ManagerBasedRLEnv", env_ids: torch.Tensor) -> None:
     )
 
 
-# -----------------------------------------------------------------------------
 # Helpers
-# -----------------------------------------------------------------------------
-
 def _set_robot_pose(env, env_ids, rx, ry, yaw):
     """Set robot root pose: env-local XY (+ origin) + yaw rotation.
 
@@ -166,18 +95,18 @@ def _set_robot_pose(env, env_ids, rx, ry, yaw):
     (unlike repositioning kinematic walls), so this is safe.
     """
     asset = env.scene["robot"]
-    origins = env.scene.env_origins[env_ids]  # [n, 3]
+    origins = env.scene.env_origins[env_ids]
     n = env_ids.numel()
     pos = torch.zeros(n, 3, device=env.device)
     pos[:, 0] = rx
     pos[:, 1] = ry
-    pos[:, 2] = 0.05  # match asset init height
+    pos[:, 2] = 0.05 
     world_pos = pos + origins
     half_yaw = 0.5 * yaw
     quat = torch.stack(
         [torch.cos(half_yaw), torch.zeros_like(yaw), torch.zeros_like(yaw), torch.sin(half_yaw)],
         dim=-1,
-    )  # (w, x, y, z) pure yaw
+    )  
     pose = torch.cat([world_pos, quat], dim=-1)
     asset.write_root_pose_to_sim(pose, env_ids=env_ids)
     vel = torch.zeros(n, 6, device=env.device)

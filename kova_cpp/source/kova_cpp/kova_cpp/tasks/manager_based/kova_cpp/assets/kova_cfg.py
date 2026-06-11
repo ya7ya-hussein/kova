@@ -1,4 +1,4 @@
-# Copyright (c) 2025, KOVA Project.
+# Copyright (c) 2026, KOVA Project.
 # SPDX-License-Identifier: BSD-3-Clause
 
 """iRobot Create 3 articulation config for KOVA."""
@@ -9,21 +9,17 @@ import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
-# Default USD path. Override this in your env_cfg if your Create 3 USD lives elsewhere.
-# Common locations:
-#   - {ISAAC_NUCLEUS_DIR}/Robots/iRobot/Create_3/create_3.usd  (if shipped)
-#   - A locally converted USD from create3_sim's create3.urdf
 _DEFAULT_USD = os.environ.get(
     "KOVA_CREATE3_USD",
     os.path.join(os.path.dirname(__file__), "Create3/create_3.usd"),
 )
 
-# iRobot Create 3 specs (per the task brief)
-KOVA_WHEEL_RADIUS = 0.03575   # m
-KOVA_WHEEL_BASE   = 0.233     # m (distance between left & right wheels)
-KOVA_MAX_LIN      = 0.6       # m/s
-KOVA_MAX_ANG      = 0.6       # rad/s
-KOVA_BODY_RADIUS  = 0.18      # m (chassis disc — informational; used by coverage map)
+# iRobot Create 3 specs 
+KOVA_WHEEL_RADIUS = 0.03575   
+KOVA_WHEEL_BASE   = 0.233     
+KOVA_MAX_LIN      = 0.6       
+KOVA_MAX_ANG      = 0.6       
+KOVA_BODY_RADIUS  = 0.18      
 
 KOVA_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
@@ -49,7 +45,6 @@ KOVA_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        # Start slightly above ground so chassis settles cleanly.
         pos=(0.0, 0.0, 0.05),
         rot=(1.0, 0.0, 0.0, 0.0),
         joint_pos={
@@ -62,10 +57,6 @@ KOVA_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        # Velocity-controlled wheel actuators. Velocity limit is well above the
-        # wheel speed implied by max linear/angular cmds:
-        #   ω_wheel_max = (KOVA_MAX_LIN + KOVA_MAX_ANG * KOVA_WHEEL_BASE/2) / KOVA_WHEEL_RADIUS
-        #              ≈ 18.7 rad/s
         "wheels": ImplicitActuatorCfg(
             joint_names_expr=["(left|right)_wheel_joint"],
             stiffness=0.0,
