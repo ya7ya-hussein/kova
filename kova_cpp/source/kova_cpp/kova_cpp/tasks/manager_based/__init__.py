@@ -3,6 +3,4 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-# import gymnasium as gym  # noqa: F401
-
 from .kova_cpp import *  # noqa: F401, F403
