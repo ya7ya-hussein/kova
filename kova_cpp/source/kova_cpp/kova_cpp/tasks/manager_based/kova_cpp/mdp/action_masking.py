@@ -11,23 +11,23 @@ reachable uncovered cell and steers the robot there, handing control straight
 back to the policy as soon as a new cell is covered.
 
 IMPORTANT - terminations: this escape can ONLY work if the deployment env has the
-`no_progress` and `stuck_in_place` terminations DISABLED. Those are training-only
-episode-shorteners; in deployment `stuck_in_place` (30 steps without translating)
-fires while the escape is turning in place toward a frontier, killing the episode
-before it can drive. play_eval.py disables them; do the same in any deploy script.
+`no_progress` and `stuck_in_place` terminations DISABLED (play_eval.py does this).
 
-Frame convention (what broke the previous version):
-    The coverage map stores cells as row = +y, col = +x, with
-        world_x = origin_x + (col + 0.5) * cell_size
-        world_y = origin_y + (row + 0.5) * cell_size
-    Everything here is computed in that world frame and compared against the
-    *world* robot yaw (`robot_yaw`) using atan2(dy, dx). No egocentric / row-sign
-    conversion, so the commanded heading always matches reality.
+Frame convention: the coverage map stores cells as row = +y, col = +x, with
+world_x = origin_x + (col + 0.5)*cell_size and world_y = origin_y + (row+0.5)*cell.
+Everything here is computed in that world frame and compared against the *world*
+robot yaw (`robot_yaw`) via atan2(dy, dx) -- no egocentric / row-sign conversion.
 
-Division of labour: the escape handles GLOBAL relocation (getting the robot from
-a dead end to the vicinity of an uncovered region over a collision-safe path);
-the policy's reactive control handles LOCAL coverage, including the cells right
-up against the walls, once it has been relocated there.
+GOAL/SWEEP CONSISTENCY (the bug this version fixes): a cell only qualifies as a
+goal if standing there would let the robot's *disc* sweep actually cover an
+uncovered cell. We therefore build the goal mask with the exact same disc kernel
+the coverage map uses to stamp visited cells (`cmap._sweep_kernel`). The previous
+version used a square (Chebyshev) dilation, which marked the 12 diagonal-corner
+cells (Euclidean distance > sweep radius) as goal-reachable even though the disc
+sweep can never reach them. When the only nearby uncovered cells sat at those
+corners, BFS reported the robot was "already at a goal", the escape fell into the
+spin-in-place branch, and -- because spinning never changes the robot's cell --
+it deadlocked there forever with coverage frozen.
 
 DEPLOYMENT / play only. Do not call it inside the training loop.
 """
@@ -51,13 +51,25 @@ def _wrap_to_pi(a: float) -> float:
 
 
 def _dilate(mask_2d: torch.Tensor, radius: int) -> torch.Tensor:
-    """Binary dilation of a [H, W] bool mask by a square kernel of the given radius."""
+    """Square (Chebyshev) binary dilation of a [H, W] bool mask. Used only for
+    obstacle clearance, where a conservative square margin is exactly what we want."""
     if radius <= 0:
         return mask_2d
     k = 2 * radius + 1
     m = mask_2d.float().view(1, 1, *mask_2d.shape)
     out = F.max_pool2d(m, kernel_size=k, stride=1, padding=radius) > 0.5
     return out.view(*mask_2d.shape)
+
+
+def _sweep_reach(mask_2d: torch.Tensor, disc_kernel: torch.Tensor) -> torch.Tensor:
+    """Cells from which the robot's disc sweep would overlap a True cell of `mask_2d`.
+
+    Uses the SAME disc kernel the coverage map stamps with, so a 'goal' cell is
+    exactly one where standing there covers an uncovered cell -- no false goals."""
+    k = disc_kernel.shape[0]
+    m = mask_2d.float().view(1, 1, *mask_2d.shape)
+    reach = F.conv2d(m, disc_kernel.view(1, 1, k, k), padding=k // 2) > 0.5
+    return reach.view(*mask_2d.shape)
 
 
 def _bfs_path(traversable: np.ndarray, goals: np.ndarray, start: tuple[int, int]):
@@ -129,11 +141,8 @@ def apply_dijkstra_escape(
         lookahead:        cells ahead along the path to aim at (small = tight corners).
         v_cmd:            forward speed (normalised) once aligned with the waypoint.
         w_gain:           proportional turn gain on heading error.
-        align_tol:        rad; above this the robot turns in place instead of driving
-                          (no arcing -> safe near walls).
-        clearance_cells:  obstacle dilation in cells. Default = ceil(radius/cell) (=2,
-                          ~0.3 m clear). Raise to 3 if the escape ever clips a wall;
-                          lower toward 1 only if 95% proves unreachable.
+        align_tol:        rad; above this the robot turns in place instead of driving.
+        clearance_cells:  obstacle dilation in cells. Default = ceil(radius/cell).
     """
     cmap = env.coverage_map
     stuck = cmap.steps_since_new_cell >= int(stuck_steps)
@@ -142,7 +151,7 @@ def apply_dijkstra_escape(
 
     if clearance_cells is None:
         clearance_cells = int(math.ceil(cmap.robot_radius / cmap.cell_size))
-    sweep_cells = int(math.ceil(cmap.robot_radius / cmap.cell_size))
+    disc_kernel = cmap._sweep_kernel  # exact kernel used to stamp coverage
 
     out = actions.clone()
     stuck_ids = torch.nonzero(stuck, as_tuple=False).squeeze(-1).tolist()
@@ -151,7 +160,9 @@ def apply_dijkstra_escape(
         inflated = _dilate(cmap.obstacles[e], clearance_cells)
         traversable = cmap.free_mask[e] & ~inflated          # robot centre may stand here
         uncovered = cmap.free_mask[e] & ~cmap.visited[e]     # cells still needing coverage
-        goals = _dilate(uncovered, sweep_cells) & traversable  # stand here -> sweep hits uncovered
+        # A goal is a traversable cell whose DISC sweep would cover an uncovered cell
+        # (same kernel as coverage stamping -> arriving at a goal really covers ground).
+        goals = _sweep_reach(uncovered, disc_kernel) & traversable
 
         if not bool(goals.any()):
             continue  # nothing safely reachable left -> leave the policy action untouched
@@ -163,16 +174,15 @@ def apply_dijkstra_escape(
 
         path = _bfs_path(trav_np, goals_np, (sr, sc))
 
+        # No safe path to a cell that actually covers uncovered ground: hand control
+        # back to the policy (do NOT spin in place -- spinning never changes the cell,
+        # so it would deadlock). The policy's reactive control may still reach it.
+        if path is None or len(path) < 2:
+            continue
+
         rx = float(cmap.robot_xy_world[e, 0].item())
         ry = float(cmap.robot_xy_world[e, 1].item())
         yaw = float(cmap.robot_yaw[e].item())
-
-        # No reachable target, or already on a covering cell but stuck: rotate gently
-        # in place so the observation changes (safe now that stuck_in_place is off).
-        if path is None or len(path) < 2:
-            out[e, 0] = 0.0
-            out[e, 1] = 0.5
-            continue
 
         wp_r, wp_c = path[min(lookahead, len(path) - 1)]
         wp_x = cmap.origin_x + (wp_c + 0.5) * cmap.cell_size
