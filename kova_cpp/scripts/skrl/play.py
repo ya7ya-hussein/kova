@@ -235,8 +235,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, expe
             # - single-agent (deterministic) actions
             else:
                 actions = outputs[-1].get("mean_actions", outputs[0])
-            # Layer-2 escape: override only envs stuck >= k_s steps (deployment value)
-            # actions = apply_dijkstra_escape(env.unwrapped, actions, stuck_threshold=3)
+            # Layer-2 escape (deployment only): rescue the policy from endgame local optima
+            actions = apply_dijkstra_escape(env.unwrapped, actions, stuck_steps=50)
             # env stepping
             obs, _, _, _, _ = env.step(actions)
 
