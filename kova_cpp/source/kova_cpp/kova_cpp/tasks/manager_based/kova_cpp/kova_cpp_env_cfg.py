@@ -260,7 +260,7 @@ class RewardsCfg:
         params={"v_max": KOVA_MAX_LIN, "dt": None},
     )
 
-    distance_guidance = RewTerm(func=mdp.distance_guidance_reward, weight=0.05)
+    # distance_guidance = RewTerm(func=mdp.distance_guidance_reward, weight=0.05)
     direction_change = RewTerm(func=mdp.direction_change_penalty, weight=-0.02)
 
     completion = RewTerm(
@@ -287,12 +287,12 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     no_progress = DoneTerm(
         func=mdp.no_progress,
-        params={"max_steps_without_new_cell": 150},
+        params={"max_steps_without_new_cell": 500},
         time_out=False,
     )
     stuck_in_place = DoneTerm(
         func=mdp.stuck_in_place,
-        params={"max_steps_without_moving": 30},
+        params={"max_steps_without_moving": 100},
         time_out=False,
     )
     collision = DoneTerm(
@@ -339,7 +339,7 @@ class KovaCppEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.dt = 1.0 / 60.0
         self.sim.render_interval = self.decimation
 
-        level_episode_s = {1: 140.0, 2: 250.0, 3: 220.0, 4: 280.0, 5: 350.0, 6: 450.0}
+        level_episode_s = {1: 140.0, 2: 250.0, 3: 450.0, 4: 280.0, 5: 350.0, 6: 450.0}
         self.episode_length_s = level_episode_s.get(CURRICULUM_LEVEL, 150.0)
 
         room_w, room_h = room_size_m()

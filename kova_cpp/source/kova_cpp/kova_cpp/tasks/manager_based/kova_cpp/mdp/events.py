@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
-CURRICULUM_LEVEL = 2
+CURRICULUM_LEVEL = 3
 
 LEVEL_GEOMETRY = {
     1: dict(room_w=4.0,  room_h=4.0,  robot_box=(1.0, 1.0), obstacles=[]),

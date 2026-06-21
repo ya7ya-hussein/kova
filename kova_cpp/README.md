@@ -1,135 +1,214 @@
-# KOVA — Coverage Path Planning in Isaac Lab
+# KOVA: DRL Coverage Path Planning (`kova_cpp`)
 
-Manager-based RL environment for autonomous vacuum coverage. Trained with skrl
-PPO across many parallel envs. Follows the YHBot navigation file/structure
-patterns exactly.
+**Learning to cover an unknown room, efficiently, in NVIDIA Isaac Lab.**
 
-## Install
+![Isaac Sim](https://img.shields.io/badge/Isaac_Sim-5.1-76B900?logo=nvidia&logoColor=white)
+![Isaac Lab](https://img.shields.io/badge/Isaac_Lab-RL-76B900)
+![skrl](https://img.shields.io/badge/skrl-PPO-EE4C2C?logo=pytorch&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
 
-From your Isaac Lab conda env:
+<p align="center">
+  <img src="docs/kova_demo.gif" width="700" alt="KOVA coverage policy sweeping a room">
+</p>
+
+Every traditional Coverage Path Planning (CPP) algorithm breaks down in cluttered, complex spaces. `kova_cpp` trains a deep reinforcement-learning agent in NVIDIA Isaac Lab to learn what they can't.
+
+CPP is the core engine behind robot vacuums, lawnmowers, warehouse inspectors, and search-and-rescue drones. The goal is simple in theory: cover every reachable point in a space without missing spots or wasting motion. `kova_cpp` solves the *exploration* half, covering an **unknown** room, by learning a policy with **PPO** instead of following a fixed pattern.
+
+---
+
+## Why Learn the Path?
+
+For decades the industry has relied on rule-based CPP: boustrophedon (zig-zag), spiral, cellular decomposition. These are provably complete on a known map and work beautifully in clean, open spaces. But in a cluttered room they share one critical weakness: they waste steps, and wasted steps mean wasted time and energy.
+
+Heydari et al. (2021) benchmarked traditional CPP against reinforcement learning across six real-world environments at a 90% coverage target:
+
+| Approach | Wasted steps (overlap) |
+| --- | --- |
+| Traditional CPP (zig-zag, spiral, cellular decomposition) | 24.8% to 32.7% |
+| Deep reinforcement learning | 7.9% to 9.9% |
+
+*Six environments, 90% coverage target. Source: Heydari et al. (2021).*
+
+That is three to four times less wasted motion across every run, and the gap only widens as rooms get more cluttered. That exact gap is what `kova_cpp` closes:
+
+- ✅ Adapts the path to the room's actual shape instead of forcing one pattern onto every room
+- ✅ Handles clutter and non-convex layouts where fixed lanes break down
+- ✅ Uses **no prebuilt map and no prior knowledge**, learning to cover the space by reading what is in front of it and adapting on the fly
+
+---
+
+## How It Works
+
+A manager-based RL environment in **NVIDIA Isaac Lab**, trained with **skrl PPO** (KL-adaptive learning rate) across thousands of parallel environments, headless. The robot is an **iRobot Create 3** (differential drive).
+
+### Observation (`12369` dims)
+
+| Component | Dim |
+| --- | --- |
+| Multi-scale **egocentric coverage map** (3 channels × 4 scales × 32 × 32) | 12288 |
+| 2D **LiDAR** (360° FOV, 6° resolution, 60 beams) | 60 |
+| **Action history** (last 10 × `(v, ω)`) | 20 |
+| **Nearest-uncovered** distance | 1 |
+| **Total** | **12369** |
+
+Three coverage-map channels (*visited*, *obstacles*, *frontier*) are rendered egocentrically at four zoom levels, so the policy sees fine detail nearby and coarse context far away. Observations are normalized with skrl's `RunningStandardScaler`.
+
+### Action: continuous `(v, ω)`
+
+A 2D continuous action (linear and angular velocity) is scaled and mapped to differential-drive wheel speeds (`ωL`, `ωR`) by `DifferentialDriveAction`.
+
+### Reward (efficiency-shaped)
+
+| Term | Weight | Purpose |
+| --- | --- | --- |
+| `new_cell` | **+1.0** | reward each newly covered cell (primary driver) |
+| `completion` | **+50.0** | one-time bonus at ≥ 95% coverage |
+| `step` | **-0.12** | per-step time and efficiency pressure |
+| `collision` | **-5.0** | discourage hitting walls and obstacles |
+| `tv` | **+0.05** | encourage forward translation |
+| `direction_change` | **-0.02** | discourage jitter, encourage straight lanes |
+| `blocking` | **-0.1** | soft action mask; penalizes steering into an invalid cardinal when valid ones exist |
+
+### Coverage map: the single source of truth
+
+A batched occupancy grid (0.1 m cells) tracks *visited / obstacles / frontier* per environment. The visited grid is stamped by sweeping a disc-shaped kernel (robot radius 0.18 m) around the robot's pose. It is updated from odometry, not SLAM. Every reward, observation, and termination reads from this one map, kept fresh because Isaac Lab evaluates observation terms first each step.
+
+### Curriculum
+
+Training proceeds over a **6-level curriculum** of rooms that grow larger and more cluttered (up to ~20 m). Levels 1 to 3 are trained. **Level 3** (an **8 × 8 m room with a single obstacle** and a 450 s budget) is the validated target.
+
+---
+
+## Results
+
+Trained 1M timesteps on Level 3 from a fresh policy. Learning was clean and **still improving at 1M**:
+
+| Signal | Behavior |
+| --- | --- |
+| Sweeping pattern | efficient, straight back-and-forth lanes with minimal re-covering |
+| Total reward (mean) | rising throughout, ~236 to ~254, highest at the end |
+| Per-episode coverage (`new_cell`) | rising throughout (more floor covered per episode) |
+| Policy std / entropy | healthy decay 0.47 to 0.05, stable convergence to a near-deterministic policy |
+| Collisions | trending down over training |
+
+### Known limitation: endgame local optima
+
+Once ~85% is covered, a deterministic policy can settle into a repeating motion cycle it doesn't break out of, and the episode ends on no-progress. This is a **well-documented failure mode of end-to-end DRL for CPP** in cluttered, non-convex rooms.
+
+Over the area it does cover, the learned policy sweeps efficiently, the advantage DRL-CPP targets.
+
+---
+
+## Code Map
+
+| File | Role |
+| --- | --- |
+| `coverage_map.py` | Per-env grid state (visited / obstacles / frontier), multi-scale ego obs, batched BFS frontier, translational-velocity bookkeeping. The heart of everything. |
+| `mdp/actions.py` | `DifferentialDriveAction`: maps `(v, ω)` to wheel speeds `(ωL, ωR)`. |
+| `mdp/observations.py` | `CoverageMapObs` (also owns the map lifecycle), LiDAR, action history, nearest-uncovered. |
+| `mdp/rewards.py` | The reward terms. |
+| `mdp/terminations.py` | `time_out`, `coverage_complete`, `no_progress`, `stuck_in_place`, `collision`, `out_of_bounds`. |
+| `mdp/events.py` | Single fused reset event: room sizing, obstacle placement, robot pose, and CoverageMap sync. |
+| `assets/kova_cfg.py` | iRobot Create 3 articulation config. |
+| `kova_cpp_env_cfg.py` | Scene, cfg groups, and curriculum-aware `__post_init__`. |
+| `agents/skrl_ppo_cfg.yaml` | PPO hyperparameters. |
+
+---
+
+## Design Notes
+
+- **CoverageMap is the single source of truth.** It is created lazily by the observation term and attached to `env.coverage_map`; every reward, observation, and termination reads from that one place.
+- **Updated from odometry, not SLAM.** No ROS or SLAM Toolbox in the training loop; the visited grid is stamped from the robot's articulation pose.
+- **Multi-scale frontier persistence.** The frontier channel is max-pooled to the coarse pixel's receptive area before sampling, so a coarse pixel reads 1 whenever any frontier point falls inside it. This is critical for long-range planning.
+- **Soft action masking (`blocking`).** A continuous action space cannot be hard-masked, so the heading is projected onto the nearest cardinal and lightly penalized if that cardinal is invalid while valid options exist. It nudges rather than commands.
+
+---
+
+## Getting Started
+
+> Requires an Isaac Lab conda environment and an iRobot Create 3 USD asset.
+
+**Install** (from the `kova_cpp/` directory):
+
 ```bash
 cd source/kova_cpp
 pip install -e .
 ```
 
-Make sure your Create 3 USD is reachable. Either:
-- Drop a `create_3.usd` in `kova_cpp/tasks/manager_based/kova_cpp/assets/`, **or**
-- Export the env var: `export KOVA_CREATE3_USD=/abs/path/to/create_3.usd`
+Make the Create 3 USD reachable. Either drop a `create_3.usd` in
+`kova_cpp/tasks/manager_based/kova_cpp/assets/`, or export:
 
-## Train / Play
+```bash
+export KOVA_CREATE3_USD=/abs/path/to/create_3.usd
+```
 
-The environments register automatically when the package is imported. From an
-Isaac-Lab–style training script (e.g. `scripts/skrl/train.py` from the YHBot
-repo, copied unchanged):
+**Train:**
 
 ```bash
 python scripts/skrl/train.py \
     --task Isaac-Coverage-KOVA-v0 \
-    --num_envs 4096 \
+    --num_envs 1024 \
     --headless
 ```
 
-Curriculum level is set on the cfg object; the easiest way is to override via
-Hydra or set an env var and read it in the cfg. To bump the level:
-```python
-# in your training script
-env_cfg.curriculum_level = 3
+**Play** (deterministic rollout, single env):
+
+```bash
+python scripts/skrl/play.py --task Isaac-Coverage-KOVA-v0 --num_envs 1
 ```
 
-## Architecture map
+Curriculum level is set on the cfg object (e.g. `env_cfg.curriculum_level = 3`).
 
-| File | Role |
+**Before a large run**, check two things:
+
+- **Create 3 USD joint names.** The code assumes `left_wheel_joint` and `right_wheel_joint`. If your USD differs, update `kova_cfg.py` and `kova_cpp_env_cfg.py`.
+- **VRAM.** The internal grid scales with curriculum level (it spans `room + 4 m`). At Level 6 the three grid buffers run into the hundreds of MB at 1024 envs; drop `--num_envs` if you hit OOM.
+
+---
+
+## Tech Stack
+
+- **Simulation:** NVIDIA Isaac Sim 5.1 · Isaac Lab
+- **RL:** skrl 1.4.3 · PPO (KL-adaptive LR) · PyTorch
+- **Robot model:** iRobot Create 3 (differential drive)
+
+*SLAM and ROS 2 are intentionally kept out of the training loop.*
+
+---
+
+## Hardware
+
+Developed and trained on:
+
+- **GPU:** NVIDIA RTX 5080
+- **CPU:** Intel Core Ultra 9 285K
+- **OS:** Ubuntu 24.04
+
+---
+
+## Roadmap
+
+| Item | Status |
 | --- | --- |
-| `coverage_map.py` | Per-env grid state (visited / obstacles / frontier), multi-scale ego obs, batched BFS, TV. The heart of everything. |
-| `assets/kova_cfg.py` | iRobot Create 3 articulation config. |
-| `mdp/actions.py` | `DifferentialDriveAction`: (v, ω) → (ωL, ωR). |
-| `mdp/observations.py` | `CoverageMapObs` (also owns lifecycle), LiDAR, action history, nearest-uncovered. |
-| `mdp/rewards.py` | 8 reward terms, exact weights per the spec. |
-| `mdp/terminations.py` | time_out, no_progress, collision. |
-| `mdp/events.py` | Single fused reset event: room sizing + obstacle placement + robot pose + CoverageMap sync. |
-| `mdp/action_masking.py` | Layer-2 Dijkstra escape (callable from training loop). |
-| `kova_cpp_env_cfg.py` | Scene + cfg groups + curriculum-aware `__post_init__`. |
-| `agents/skrl_ppo_cfg.yaml` | PPO config. |
+| Curriculum Levels 1 to 3 (up to 8 × 8 m, single obstacle) | ✅ Trained and validated |
+| Curriculum Levels 4 to 6 (larger, multi-obstacle rooms) | ⏳ Planned |
+| Generalization across room shapes and clutter | ⏳ Planned |
+| Endgame local optima | 🔬 Known limitation; closed by a classical sweep on the known map |
 
-## Key design choices
 
-### CoverageMap as the single source of truth
-`CoverageMap` is created lazily by the `CoverageMapObs` term and attached to
-`env.coverage_map`. Every other reward, observation, and termination reads
-from this one place. Because Isaac Lab calls observation terms first in the
-step, the map is always fresh by the time rewards/terminations evaluate.
+## Author
 
-### Coverage map updates from odometry, not SLAM
-Per the spec: no ROS, no SLAM Toolbox in the training loop. The visited grid
-is updated by sweeping a disc-shaped kernel around the robot's articulation
-position. SLAM stays decoupled and is reintroduced at deployment.
+**Yahya Hussein**, AI Robotics Engineer
+🔗 [github.com/ya7ya-hussein](https://github.com/ya7ya-hussein)
 
-### Multi-scale frontier persistence
-The frontier channel is max-pooled with a kernel sized to the coarse pixel's
-receptive area *before* sampling, so a coarse pixel reads 1 whenever ANY
-frontier point falls inside it. Critical for long-range planning.
+---
 
-### Layer-1 masking as reward shaping
-Continuous action space means we cannot hard-mask. Instead `blocking_penalty`
-projects the robot heading onto the nearest cardinal, checks if that cardinal
-is valid (in-bounds, free, unvisited), and pays a penalty if it is invalid
-while valid options exist. Weight is small so it nudges rather than commands.
+## License
 
-### Layer-2 masking outside PPO
-`apply_dijkstra_escape(env, actions)` is a pure helper. In the YHBot training
-script, between `policy.act(obs)` and `env.step(actions)`, insert:
+Released under the **BSD-3-Clause** License.
 
-```python
-from kova_cpp.tasks.manager_based.kova_cpp.mdp.action_masking import apply_dijkstra_escape
-...
-actions = policy.act(obs)
-actions = apply_dijkstra_escape(env.unwrapped, actions, stuck_threshold=7)
-obs, reward, terminated, truncated, info = env.step(actions)
-```
+---
 
-This keeps PPO completely unaware of the override — the action it observes in
-the rollout is the one that was actually applied, which is fine for PPO's
-on-policy update (it just treats the escape steps as "policy got lucky").
-
-If you'd rather route Dijkstra escape *inside* the env, the cleanest place is
-a custom wrapper that intercepts `step`. The helper is wrapper-friendly.
-
-### Domain randomisation is a single fused event
-`randomize_room` does all four things (room sizing, obstacles, robot pose,
-CoverageMap sync) atomically. This avoids any window where the physical scene
-disagrees with the coverage map's idea of where the walls are.
-
-## Things to verify before launching a big run
-
-1. **Create 3 USD joint names.** This code assumes the wheel joints are
-   `left_wheel_joint` and `right_wheel_joint`. If your USD uses different
-   names (e.g. `left_drive_joint`), update `kova_cfg.py` and `kova_cpp_env_cfg.py`.
-
-2. **LiDAR ray count from RayCasterCfg.** `lidar_obs` downsamples the raw rays
-   to 60 if the count differs, but it's cleaner to set `horizontal_res=6.0`
-   (which gives 60 rays at 360°) and not downsample. The cfg already does this.
-
-3. **Memory.** With `max_world_size = room_max + 4 m`, the internal grid scales
-   with curriculum. At level 6 (20 m room → 24 m grid → 240×240 cells, bool
-   storage) the three buffers occupy ~570 MB at 4096 envs. Comfortable on a
-   24 GB GPU; tight on smaller cards. Drop `num_envs` if you OOM.
-
-4. **Episode length × decimation.** `episode_length_s = 200` at level 6 with
-   `decimation = 4` and `sim.dt = 1/60` gives 200 * 60 / 4 = 3000 outer steps.
-   `no_progress` triggers at 500 outer steps without a new cell.
-
-5. **Wall thickness vs cell size.** Walls are 0.2 m thick; cell size is 0.1 m.
-   The coverage map treats everything outside the interior as obstacle, so
-   the actual wall thickness in the physical scene doesn't affect the map —
-   only collision. Fine as-is.
-
-## Total observation size
-
-| Term | Size |
-| --- | --- |
-| Multi-scale ego map | 3 × 4 × 32 × 32 = 12288 |
-| LiDAR | 60 |
-| Action history | 10 × 2 = 20 |
-| Nearest-uncovered distance | 1 |
-| **Total** | **12369** |
-# kova
+*Built with NVIDIA Isaac Lab, Isaac Sim, and the iRobot Create 3.*
