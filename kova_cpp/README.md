@@ -1,7 +1,5 @@
 # KOVA: DRL Coverage Path Planning (`kova_cpp`)
 
-**Learning to cover an unknown room, efficiently, in NVIDIA Isaac Lab.**
-
 ![Isaac Sim](https://img.shields.io/badge/Isaac_Sim-5.1-76B900?logo=nvidia&logoColor=white)
 ![Isaac Lab](https://img.shields.io/badge/Isaac_Lab-RL-76B900)
 ![skrl](https://img.shields.io/badge/skrl-PPO-EE4C2C?logo=pytorch&logoColor=white)
