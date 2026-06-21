@@ -82,8 +82,7 @@ Trained on a PPO policy for 1M timesteps in an 8×8 m room with a single obstacl
 
 | Component | Status |
 |---|---|
-| PPO coverage policy — kova_cpp (Levels 1 to 3) | ✅ Trained and validated |
-| PPO coverage policy — kova_cpp (Levels 4 to 6) | ⏳ Planned |
+| PPO coverage policy — kova_cpp | ✅ Trained and validated |
 | A* home return | ⏳ Pending |
 | Classical CPP path generation (boustrophedon) | ⏳ Pending |
 | DRL navigation and obstacle avoidance — kova_nav | ⏳ Pending |
